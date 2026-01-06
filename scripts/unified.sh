@@ -43,6 +43,7 @@ generate_candidates() {
         # Direct execution
         echo "[W] switch $target  # $wname $mark"
         echo "[W] kill $target  # $wname"
+        echo "[W] respawn $target  # $wname restart"
         # Interactive
         echo "[W] rename $target  # $wname -> input new name"
         echo "[W] swap $target  # $wname -> select another"
@@ -52,10 +53,16 @@ generate_candidates() {
     echo "[W] rename [current]  # -> input new name"
     echo "[W] kill [current]"
     echo "[W] swap [current]  # -> select another"
+    echo "[W] respawn [current]  # restart current window"
 
     # link/move (original fzf flow)
     echo "[W] link  # -> select source window"
     echo "[W] move  # -> select source window"
+
+    # No-target window commands
+    echo "[W] rotate  # rotate panes in current window"
+    echo "[W] next-layout  # cycle through layouts"
+    echo "[W] last-window  # switch to last window"
 
     # ========== Pane commands ==========
     # pane × actions
@@ -67,6 +74,8 @@ generate_candidates() {
         echo "[P] kill $target  # $pcmd"
         echo "[P] zoom $target  # $pcmd"
         echo "[P] break $target  # $pcmd -> new window"
+        echo "[P] respawn $target  # $pcmd restart"
+        echo "[P] clear-history $target  # $pcmd clear scrollback"
         # Interactive
         echo "[P] swap $target  # $pcmd -> select another"
         echo "[P] join $target  # $pcmd -> move here"
@@ -77,10 +86,20 @@ generate_candidates() {
     echo "[P] kill [current]"
     echo "[P] break [current]  # -> new window"
     echo "[P] swap [current]  # -> select another"
+    echo "[P] respawn [current]  # restart current pane"
+    echo "[P] clear-history [current]  # clear scrollback"
 
     # layout/resize (sub-menu, no target)
     echo "[P] layout  # -> select layout"
     echo "[P] resize  # -> select direction & size"
+
+    # No-target pane commands
+    echo "[P] last-pane  # switch to last pane"
+    echo "[P] copy-mode  # enter copy mode"
+
+    # ========== Global commands ==========
+    echo "[G] display-panes  # show pane numbers"
+    echo "[G] clock-mode  # show clock"
 }
 
 # Create preview script
@@ -113,7 +132,7 @@ echo "$preview_script" > "$preview_file"
 chmod +x "$preview_file"
 
 # Set header
-FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPTS --header='Tmux Command Palette  [S]ession [W]indow [P]ane'"
+FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPTS --header='Tmux Command Palette  [S]ession [W]indow [P]ane [G]lobal'"
 
 # Determine preview options
 if [[ "$TMUX_FZF_PREVIEW" != "0" ]]; then
@@ -195,6 +214,22 @@ case "$type" in
             move)
                 "$CURRENT_DIR/window.sh" move
                 ;;
+            respawn)
+                if [[ "$target" == "[current]" ]]; then
+                    tmux respawn-window -k
+                else
+                    tmux respawn-window -k -t "$target"
+                fi
+                ;;
+            rotate)
+                tmux rotate-window
+                ;;
+            next-layout)
+                tmux next-layout
+                ;;
+            last-window)
+                tmux last-window
+                ;;
         esac
         ;;
     "[P]")
@@ -234,6 +269,36 @@ case "$type" in
                 ;;
             resize)
                 "$CURRENT_DIR/pane.sh" resize
+                ;;
+            respawn)
+                if [[ "$target" == "[current]" ]]; then
+                    tmux respawn-pane -k
+                else
+                    tmux respawn-pane -k -t "$target"
+                fi
+                ;;
+            clear-history)
+                if [[ "$target" == "[current]" ]]; then
+                    tmux clear-history
+                else
+                    tmux clear-history -t "$target"
+                fi
+                ;;
+            last-pane)
+                tmux last-pane
+                ;;
+            copy-mode)
+                tmux copy-mode
+                ;;
+        esac
+        ;;
+    "[G]")
+        case "$action" in
+            display-panes)
+                tmux display-panes
+                ;;
+            clock-mode)
+                tmux clock-mode
                 ;;
         esac
         ;;

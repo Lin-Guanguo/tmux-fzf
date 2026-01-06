@@ -22,15 +22,22 @@ fi
 FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPTS --header='Select an action.'"
 
 if [[ -z "$1" ]]; then
-    action=$(printf "switch\nlink\nmove\nswap\nrename\nkill\n[cancel]" | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS")
+    action=$(printf "switch\nlink\nmove\nswap\nrename\nkill\nrespawn\nrotate\nnext-layout\nlast-window\n[cancel]" | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS")
 else
     action="$1"
 fi
 
 [[ "$action" == "[cancel]" || -z "$action" ]] && exit
 
+# No-target actions (operate on current window)
+if [[ "$action" == "rotate" ]]; then
+    tmux rotate-window
+elif [[ "$action" == "next-layout" ]]; then
+    tmux next-layout
+elif [[ "$action" == "last-window" ]]; then
+    tmux last-window
 # Support $2 as pre-selected target (for unified.sh integration)
-if [[ -n "$2" ]]; then
+elif [[ -n "$2" ]]; then
     # Handle [current] special case
     if [[ "$2" == "[current]" ]]; then
         target=$(echo "$current_window" | sed 's/:$//')
@@ -49,6 +56,8 @@ if [[ -n "$2" ]]; then
     elif [[ "$action" == "switch" ]]; then
         echo "$target" | sed 's/:.*//g' | xargs -I{} tmux switch-client -t {}
         echo "$target" | xargs -I{} tmux select-window -t {}
+    elif [[ "$action" == "respawn" ]]; then
+        tmux respawn-window -k -t "$target"
     fi
 else
     # Original fzf selection logic
@@ -86,6 +95,8 @@ else
         elif [[ "$action" == "switch" ]]; then
             echo "$target" | sed 's/:.*//g' | xargs -I{} tmux switch-client -t {}
             echo "$target" | xargs -I{} tmux select-window -t {}
+        elif [[ "$action" == "respawn" ]]; then
+            tmux respawn-window -k -t "$target"
         fi
     fi
 fi

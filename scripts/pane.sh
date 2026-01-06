@@ -15,7 +15,7 @@ fi
 
 FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPTS --header='Select an action.'"
 if [[ -z "$1" ]]; then
-    action=$(printf "switch\nzoom\nbreak\njoin\nswap\nlayout\nkill\nresize\n[cancel]" | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS")
+    action=$(printf "switch\nzoom\nbreak\njoin\nswap\nlayout\nkill\nresize\nrespawn\nclear-history\nlast-pane\ncopy-mode\n[cancel]" | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS")
 else
     action="$1"
 fi
@@ -51,6 +51,11 @@ elif [[ "$action" == "resize" ]]; then
             tmux resize-pane -D "$size"
         fi
     fi
+# No-target actions (operate on current pane/window)
+elif [[ "$action" == "last-pane" ]]; then
+    tmux last-pane
+elif [[ "$action" == "copy-mode" ]]; then
+    tmux copy-mode
 # Support $2 as pre-selected target (for unified.sh integration)
 elif [[ -n "$2" ]]; then
     # Handle [current] special case
@@ -75,6 +80,10 @@ elif [[ -n "$2" ]]; then
         break_pane_to_window "$target"
     elif [[ "$action" == "zoom" ]]; then
         tmux resize-pane -Z -t "$target"
+    elif [[ "$action" == "respawn" ]]; then
+        tmux respawn-pane -k -t "$target"
+    elif [[ "$action" == "clear-history" ]]; then
+        echo "$target" | xargs -I{} tmux clear-history -t {}
     fi
 else
     # Original fzf selection logic
@@ -109,5 +118,9 @@ else
         echo "$target" | sort -r | xargs -I{} tmux move-pane -s {}
     elif [[ "$action" == "break" ]]; then
         break_pane_to_window "$target"
+    elif [[ "$action" == "respawn" ]]; then
+        tmux respawn-pane -k -t "$target"
+    elif [[ "$action" == "clear-history" ]]; then
+        echo "$target" | xargs -I{} tmux clear-history -t {}
     fi
 fi
