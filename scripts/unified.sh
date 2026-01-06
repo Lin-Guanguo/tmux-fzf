@@ -10,119 +10,129 @@ current_session=$(tmux display-message -p '#{session_name}')
 current_window=$(tmux display-message -p '#S:#I')
 current_pane=$(tmux display-message -p '#S:#{window_index}.#{pane_index}')
 
+# Format output: 25 char min width, longer commands just add one space
+fmt() {
+    local cmd="$1" comment="$2"
+    if [[ ${#cmd} -ge 25 ]]; then
+        printf "%s # %s\n" "$cmd" "$comment"
+    else
+        printf "%-25s # %s\n" "$cmd" "$comment"
+    fi
+}
+
 generate_candidates() {
     # Sorting strategy: far items at top, close items at bottom (near fzf input)
     # Order: Global -> Other sessions -> Current session other windows -> Current window other panes -> Current -> No-target
+    # Comments show actual tmux command for searchability
 
     # ========== [1] Global commands (top, rarely used) ==========
-    echo "[G] display-panes  # show pane numbers"
-    echo "[G] clock-mode  # show clock"
+    fmt "[G] display-panes" "display-panes"
+    fmt "[G] clock-mode" "clock-mode"
 
     # ========== [2] Other sessions (far) ==========
     tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}' 2>/dev/null | while IFS='|' read -r name wins attached; do
         [[ "$name" == "$current_session" ]] && continue
-        local mark=""
-        [[ "$attached" == "1" ]] && mark="*"
-        echo "[S] switch $name  # $mark ($wins win)"
-        echo "[S] kill $name  # $mark"
-        echo "[S] detach $name  # $mark"
-        echo "[S] rename $name  # $mark -> input new name"
+        local info="($wins win)"
+        [[ "$attached" == "1" ]] && info="*attached ($wins win)"
+        fmt "[S] switch $name" "switch-client $info"
+        fmt "[S] kill $name" "kill-session"
+        fmt "[S] detach $name" "detach-client"
+        fmt "[S] rename $name" "rename-session → input"
     done
 
     # ========== [3] Windows in other sessions ==========
     tmux list-windows -a -F '#{session_name}:#{window_index}|#{window_name}|#{session_name}' 2>/dev/null | while IFS='|' read -r target wname sess; do
         [[ "$sess" == "$current_session" ]] && continue
-        echo "[W] switch $target  # $wname"
-        echo "[W] kill $target  # $wname"
-        echo "[W] respawn $target  # $wname restart"
-        echo "[W] rename $target  # $wname -> input new name"
-        echo "[W] swap $target  # $wname -> select another"
+        fmt "[W] switch $target" "select-window [$wname]"
+        fmt "[W] kill $target" "kill-window [$wname]"
+        fmt "[W] respawn $target" "respawn-window [$wname]"
+        fmt "[W] rename $target" "rename-window [$wname] → input"
+        fmt "[W] swap $target" "swap-window [$wname] → select"
     done
 
     # ========== [4] Panes in other sessions ==========
     tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{session_name}' 2>/dev/null | while IFS='|' read -r target pcmd sess; do
         [[ "$sess" == "$current_session" ]] && continue
-        echo "[P] switch $target  # $pcmd"
-        echo "[P] kill $target  # $pcmd"
-        echo "[P] zoom $target  # $pcmd"
-        echo "[P] break $target  # $pcmd -> new window"
-        echo "[P] respawn $target  # $pcmd restart"
-        echo "[P] clear-history $target  # $pcmd clear scrollback"
-        echo "[P] swap $target  # $pcmd -> select another"
-        echo "[P] join $target  # $pcmd -> move here"
+        fmt "[P] switch $target" "select-pane [$pcmd]"
+        fmt "[P] kill $target" "kill-pane [$pcmd]"
+        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
+        fmt "[P] break $target" "break-pane [$pcmd]"
+        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
+        fmt "[P] clear-history $target" "clear-history [$pcmd]"
+        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
+        fmt "[P] join $target" "join-pane [$pcmd]"
     done
 
     # ========== [5] Current session - other windows ==========
     tmux list-windows -F '#{session_name}:#{window_index}|#{window_name}|#{window_active}' 2>/dev/null | while IFS='|' read -r target wname active; do
         [[ "$target" == "$current_window" ]] && continue
-        echo "[W] switch $target  # $wname"
-        echo "[W] kill $target  # $wname"
-        echo "[W] respawn $target  # $wname restart"
-        echo "[W] rename $target  # $wname -> input new name"
-        echo "[W] swap $target  # $wname -> select another"
+        fmt "[W] switch $target" "select-window [$wname]"
+        fmt "[W] kill $target" "kill-window [$wname]"
+        fmt "[W] respawn $target" "respawn-window [$wname]"
+        fmt "[W] rename $target" "rename-window [$wname] → input"
+        fmt "[W] swap $target" "swap-window [$wname] → select"
     done
 
     # ========== [6] Current session - panes in other windows ==========
     tmux list-panes -s -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{window_index}' 2>/dev/null | while IFS='|' read -r target pcmd widx; do
         local cur_widx=$(echo "$current_window" | sed 's/.*://')
         [[ "$widx" == "$cur_widx" ]] && continue
-        echo "[P] switch $target  # $pcmd"
-        echo "[P] kill $target  # $pcmd"
-        echo "[P] zoom $target  # $pcmd"
-        echo "[P] break $target  # $pcmd -> new window"
-        echo "[P] respawn $target  # $pcmd restart"
-        echo "[P] clear-history $target  # $pcmd clear scrollback"
-        echo "[P] swap $target  # $pcmd -> select another"
-        echo "[P] join $target  # $pcmd -> move here"
+        fmt "[P] switch $target" "select-pane [$pcmd]"
+        fmt "[P] kill $target" "kill-pane [$pcmd]"
+        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
+        fmt "[P] break $target" "break-pane [$pcmd]"
+        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
+        fmt "[P] clear-history $target" "clear-history [$pcmd]"
+        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
+        fmt "[P] join $target" "join-pane [$pcmd]"
     done
 
     # ========== [7] Current window - other panes ==========
     tmux list-panes -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{pane_active}' 2>/dev/null | while IFS='|' read -r target pcmd active; do
         [[ "$target" == "$current_pane" ]] && continue
-        local mark=""
-        echo "[P] switch $target  # $pcmd"
-        echo "[P] kill $target  # $pcmd"
-        echo "[P] zoom $target  # $pcmd"
-        echo "[P] break $target  # $pcmd -> new window"
-        echo "[P] respawn $target  # $pcmd restart"
-        echo "[P] clear-history $target  # $pcmd clear scrollback"
-        echo "[P] swap $target  # $pcmd -> select another"
-        echo "[P] join $target  # $pcmd -> move here"
+        fmt "[P] switch $target" "select-pane [$pcmd]"
+        fmt "[P] kill $target" "kill-pane [$pcmd]"
+        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
+        fmt "[P] break $target" "break-pane [$pcmd]"
+        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
+        fmt "[P] clear-history $target" "clear-history [$pcmd]"
+        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
+        fmt "[P] join $target" "join-pane [$pcmd]"
     done
 
     # ========== [8] Current session operations ==========
-    echo "[S] rename [current]  # -> input new name"
-    echo "[S] kill $current_session  # current session"
-    echo "[S] detach $current_session  # current session"
+    fmt "[S] rename [current]" "rename-session → input"
+    fmt "[S] kill $current_session" "kill-session (current)"
+    fmt "[S] detach $current_session" "detach-client (current)"
 
     # ========== [9] Current window operations ==========
-    echo "[W] kill [current]"
-    echo "[W] respawn [current]  # restart current window"
-    echo "[W] rename [current]  # -> input new name"
-    echo "[W] swap [current]  # -> select another"
+    fmt "[W] kill [current]" "kill-window (current)"
+    fmt "[W] respawn [current]" "respawn-window (current)"
+    fmt "[W] rename [current]" "rename-window → input"
+    fmt "[W] swap [current]" "swap-window → select"
 
     # ========== [10] Current pane operations (bottom, closest) ==========
-    echo "[P] zoom [current]"
-    echo "[P] kill [current]"
-    echo "[P] break [current]  # -> new window"
-    echo "[P] swap [current]  # -> select another"
-    echo "[P] respawn [current]  # restart current pane"
-    echo "[P] clear-history [current]  # clear scrollback"
+    fmt "[P] zoom [current]" "resize-pane -Z (current)"
+    fmt "[P] kill [current]" "kill-pane (current)"
+    fmt "[P] break [current]" "break-pane (current)"
+    fmt "[P] swap [current]" "swap-pane → select"
+    fmt "[P] respawn [current]" "respawn-pane (current)"
+    fmt "[P] clear-history [current]" "clear-history (current)"
 
     # ========== [11] No-target commands (most accessible) ==========
-    echo "[S] new  # create new session"
-    echo "[W] new  # create new window"
-    echo "[W] split-h  # split horizontal"
-    echo "[W] split-v  # split vertical"
-    echo "[W] link  # -> select source window"
-    echo "[W] move  # -> select source window"
-    echo "[W] rotate  # rotate panes in current window"
-    echo "[W] next-layout  # cycle through layouts"
-    echo "[W] last-window  # switch to last window"
-    echo "[P] layout  # -> select layout"
-    echo "[P] resize  # -> select direction & size"
-    echo "[P] last-pane  # switch to last pane"
-    echo "[P] copy-mode  # enter copy mode"
+    fmt "[S] new" "new-session"
+    fmt "[W] new" "new-window"
+    fmt "[W] split-h" "split-window -h"
+    fmt "[W] split-v" "split-window -v"
+    fmt "[W] link" "link-window → select"
+    fmt "[W] move" "move-window → select"
+    fmt "[W] rotate" "rotate-window"
+    fmt "[W] next-layout" "next-layout"
+    fmt "[W] last-window" "last-window"
+    fmt "[P] layout" "select-layout → select"
+    fmt "[P] resize" "resize-pane → direction"
+    fmt "[P] last-pane" "last-pane"
+    fmt "[P] copy-mode" "copy-mode"
 }
 
 # Create preview script
