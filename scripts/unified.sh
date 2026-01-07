@@ -5,146 +5,141 @@
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CURRENT_DIR/.envs"
 
-# Get current context
-current_session=$(tmux display-message -p '#{session_name}')
-current_window=$(tmux display-message -p '#S:#I')
-current_pane=$(tmux display-message -p '#S:#{window_index}.#{pane_index}')
+# Get current context (single tmux call for performance)
+read -r current_session current_window current_pane cur_ses_wins cur_win_name cur_pane_cmd cur_pane_idx <<< \
+    "$(tmux display-message -p '#{session_name} #S:#I #S:#{window_index}.#{pane_index} #{session_windows} #{window_name} #{pane_current_command} #{pane_index}')"
+cur_widx="${current_window##*:}"
 
 # Format output: 25 char min width, longer commands just add one space
 fmt() {
-    local cmd="$1" comment="$2"
-    if [[ ${#cmd} -ge 25 ]]; then
-        printf "%s # %s\n" "$cmd" "$comment"
+    local cmd="$1" desc="$2"
+    if [[ -z "$desc" ]]; then
+        printf "%s\n" "$cmd"
+    elif [[ ${#cmd} -ge 25 ]]; then
+        printf "%s  %s\n" "$cmd" "$desc"
     else
-        printf "%-25s # %s\n" "$cmd" "$comment"
+        printf "%-25s %s\n" "$cmd" "$desc"
     fi
+}
+
+# Emit all pane actions for a target (DRY helper)
+# info format: process@window or process@window~ for current
+emit_pane_actions() {
+    local target="$1" info="$2"
+    fmt "[P] select-pane -t $target" "$info"
+    fmt "[P] kill-pane -t $target" "$info"
+    fmt "[P] resize-pane -Z -t $target" "$info zoom"
+    fmt "[P] break-pane -t $target" "$info"
+    fmt "[P] respawn-pane -t $target" "$info"
+    fmt "[P] clear-history -t $target" "$info"
+    fmt "[P] swap-pane -s $target -t *" "$info select target"
+    fmt "[P] join-pane -s $target" "$info to here"
 }
 
 generate_candidates() {
     # Sorting strategy: far items at top, close items at bottom (near fzf input)
     # Order: Global -> Other sessions -> Current session other windows -> Current window other panes -> Current -> No-target
-    # Comments show actual tmux command for searchability
+    # Left side: actual tmux command, Right side: context info
 
     # ========== [1] Global commands (top, rarely used) ==========
-    fmt "[G] display-panes" "display-panes"
-    fmt "[G] clock-mode" "clock-mode"
+    fmt "[G] display-panes" "show pane numbers"
+    fmt "[G] clock-mode" "show clock"
 
     # ========== [2] Other sessions (far) ==========
     tmux list-sessions -F '#{session_name}|#{session_windows}|#{session_attached}' 2>/dev/null | while IFS='|' read -r name wins attached; do
         [[ "$name" == "$current_session" ]] && continue
-        local info="($wins win)"
-        [[ "$attached" == "1" ]] && info="*attached ($wins win)"
-        fmt "[S] switch $name" "switch-client $info"
-        fmt "[S] kill $name" "kill-session"
-        fmt "[S] detach $name" "detach-client"
-        fmt "[S] rename $name" "rename-session → input"
+        local info="$wins win"
+        [[ "$attached" == "1" ]] && info="*attached $wins win"
+        fmt "[S] switch-client -t $name" "$info"
+        fmt "[S] kill-session -t $name" "$info"
+        fmt "[S] detach-client -s $name" "$info"
+        fmt "[S] rename-session -t $name *" "$info input new name"
     done
 
     # ========== [3] Windows in other sessions ==========
     tmux list-windows -a -F '#{session_name}:#{window_index}|#{window_name}|#{session_name}' 2>/dev/null | while IFS='|' read -r target wname sess; do
         [[ "$sess" == "$current_session" ]] && continue
-        fmt "[W] switch $target" "select-window [$wname]"
-        fmt "[W] kill $target" "kill-window [$wname]"
-        fmt "[W] respawn $target" "respawn-window [$wname]"
-        fmt "[W] rename $target" "rename-window [$wname] → input"
-        fmt "[W] swap $target" "swap-window [$wname] → select"
+        fmt "[W] select-window -t $target" "$wname"
+        fmt "[W] kill-window -t $target" "$wname"
+        fmt "[W] respawn-window -t $target" "$wname"
+        fmt "[W] rename-window -t $target *" "$wname input new name"
+        fmt "[W] swap-window -s $target -t *" "$wname select target"
     done
 
     # ========== [4] Panes in other sessions ==========
-    tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{session_name}' 2>/dev/null | while IFS='|' read -r target pcmd sess; do
+    tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{session_name}|#{window_name}' 2>/dev/null | while IFS='|' read -r target pcmd sess wname; do
         [[ "$sess" == "$current_session" ]] && continue
-        fmt "[P] switch $target" "select-pane [$pcmd]"
-        fmt "[P] kill $target" "kill-pane [$pcmd]"
-        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
-        fmt "[P] break $target" "break-pane [$pcmd]"
-        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
-        fmt "[P] clear-history $target" "clear-history [$pcmd]"
-        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
-        fmt "[P] join $target" "join-pane [$pcmd]"
+        emit_pane_actions "$target" "$pcmd@$wname"
     done
 
     # ========== [5] Current session - other windows ==========
     tmux list-windows -F '#{session_name}:#{window_index}|#{window_name}|#{window_active}' 2>/dev/null | while IFS='|' read -r target wname active; do
         [[ "$target" == "$current_window" ]] && continue
-        fmt "[W] switch $target" "select-window [$wname]"
-        fmt "[W] kill $target" "kill-window [$wname]"
-        fmt "[W] respawn $target" "respawn-window [$wname]"
-        fmt "[W] rename $target" "rename-window [$wname] → input"
-        fmt "[W] swap $target" "swap-window [$wname] → select"
+        fmt "[W] select-window -t $target" "$wname"
+        fmt "[W] kill-window -t $target" "$wname"
+        fmt "[W] respawn-window -t $target" "$wname"
+        fmt "[W] rename-window -t $target *" "$wname input new name"
+        fmt "[W] swap-window -s $target -t *" "$wname select target"
     done
 
     # ========== [6] Current session - panes in other windows ==========
-    tmux list-panes -s -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{window_index}' 2>/dev/null | while IFS='|' read -r target pcmd widx; do
-        local cur_widx=$(echo "$current_window" | sed 's/.*://')
+    tmux list-panes -s -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{window_index}|#{window_name}' 2>/dev/null | while IFS='|' read -r target pcmd widx wname; do
         [[ "$widx" == "$cur_widx" ]] && continue
-        fmt "[P] switch $target" "select-pane [$pcmd]"
-        fmt "[P] kill $target" "kill-pane [$pcmd]"
-        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
-        fmt "[P] break $target" "break-pane [$pcmd]"
-        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
-        fmt "[P] clear-history $target" "clear-history [$pcmd]"
-        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
-        fmt "[P] join $target" "join-pane [$pcmd]"
+        emit_pane_actions "$target" "$pcmd@$wname"
     done
 
     # ========== [7] Current window - other panes ==========
-    tmux list-panes -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{pane_active}' 2>/dev/null | while IFS='|' read -r target pcmd active; do
+    tmux list-panes -F '#{session_name}:#{window_index}.#{pane_index}|#{pane_current_command}|#{pane_active}|#{window_name}' 2>/dev/null | while IFS='|' read -r target pcmd active wname; do
         [[ "$target" == "$current_pane" ]] && continue
-        fmt "[P] switch $target" "select-pane [$pcmd]"
-        fmt "[P] kill $target" "kill-pane [$pcmd]"
-        fmt "[P] zoom $target" "resize-pane -Z [$pcmd]"
-        fmt "[P] break $target" "break-pane [$pcmd]"
-        fmt "[P] respawn $target" "respawn-pane [$pcmd]"
-        fmt "[P] clear-history $target" "clear-history [$pcmd]"
-        fmt "[P] swap $target" "swap-pane [$pcmd] → select"
-        fmt "[P] join $target" "join-pane [$pcmd]"
+        emit_pane_actions "$target" "$pcmd@$wname"
     done
 
-    # ========== [8] Current session operations ==========
-    fmt "[S] rename [current]" "rename-session → input"
-    fmt "[S] kill $current_session" "kill-session (current)"
-    fmt "[S] detach $current_session" "detach-client (current)"
+    # ========== [8] Current session ==========
+    local cur_ses_info="${cur_ses_wins} win~"
+    fmt "[S] kill-session -t $current_session" "$cur_ses_info"
+    fmt "[S] detach-client -s $current_session" "$cur_ses_info"
+    fmt "[S] rename-session -t $current_session *" "$cur_ses_info input new name"
 
-    # ========== [9] Current window operations ==========
-    fmt "[W] kill [current]" "kill-window (current)"
-    fmt "[W] respawn [current]" "respawn-window (current)"
-    fmt "[W] rename [current]" "rename-window → input"
-    fmt "[W] swap [current]" "swap-window → select"
+    # ========== [9] Current window ==========
+    local cur_win_info="${cur_win_name}~"
+    fmt "[W] kill-window -t $current_window" "$cur_win_info"
+    fmt "[W] respawn-window -t $current_window" "$cur_win_info"
+    fmt "[W] rename-window -t $current_window *" "$cur_win_info input new name"
+    fmt "[W] swap-window -s $current_window -t *" "$cur_win_info select target"
 
-    # ========== [10] Current pane operations (bottom, closest) ==========
-    fmt "[P] zoom [current]" "resize-pane -Z (current)"
-    fmt "[P] kill [current]" "kill-pane (current)"
-    fmt "[P] break [current]" "break-pane (current)"
-    fmt "[P] swap [current]" "swap-pane → select"
-    fmt "[P] respawn [current]" "respawn-pane (current)"
-    fmt "[P] clear-history [current]" "clear-history (current)"
+    # ========== [10] Current pane (bottom, closest) ==========
+    local cur_pane_info="${cur_pane_cmd}@${cur_win_name}~"
+    fmt "[P] resize-pane -Z -t $current_pane" "$cur_pane_info zoom"
+    fmt "[P] kill-pane -t $current_pane" "$cur_pane_info"
+    fmt "[P] break-pane -t $current_pane" "$cur_pane_info"
+    fmt "[P] swap-pane -s $current_pane -t *" "$cur_pane_info select target"
+    fmt "[P] respawn-pane -t $current_pane" "$cur_pane_info"
+    fmt "[P] clear-history -t $current_pane" "$cur_pane_info"
 
     # ========== [11] No-target commands (most accessible) ==========
-    fmt "[S] new" "new-session"
-    fmt "[W] new" "new-window"
-    fmt "[W] split-h" "split-window -h"
-    fmt "[W] split-v" "split-window -v"
-    fmt "[W] link" "link-window → select"
-    fmt "[W] move" "move-window → select"
-    fmt "[W] rotate" "rotate-window"
-    fmt "[W] next-layout" "next-layout"
-    fmt "[W] last-window" "last-window"
-    fmt "[P] layout" "select-layout → select"
-    fmt "[P] resize" "resize-pane → direction"
-    fmt "[P] last-pane" "last-pane"
-    fmt "[P] copy-mode" "copy-mode"
+    fmt "[S] new-session *" "input name"
+    fmt "[W] new-window" ""
+    fmt "[W] split-window -h" "horizontal"
+    fmt "[W] split-window -v" "vertical"
+    fmt "[W] link-window -s *" "select source window"
+    fmt "[W] move-window -s *" "select source window"
+    fmt "[W] rotate-window" ""
+    fmt "[W] next-layout" ""
+    fmt "[W] last-window" ""
+    fmt "[P] select-layout *" "select layout"
+    fmt "[P] resize-pane *" "select direction & size"
+    fmt "[P] last-pane" ""
+    fmt "[P] copy-mode" ""
 }
 
 # Create preview script
 preview_script=$(cat << 'PREVIEW_SCRIPT'
 #!/usr/bin/env bash
 line="$1"
-# Extract target (word after action)
-target=$(echo "$line" | sed 's/^\[[^]]*\] [^ ]* //' | sed 's/  #.*//' | awk '{print $1}')
-if [[ -n "$target" && "$target" != "#" ]]; then
-    if [[ "$target" == "[current]" ]]; then
-        tmux capture-pane -ep 2>/dev/null
-    elif [[ "$target" == *"."* ]]; then
+# Extract target from -t or -s flag
+target=$(echo "$line" | grep -oE '(-t|-s) [^ ]+' | awk '{print $2}')
+if [[ -n "$target" ]]; then
+    if [[ "$target" == *"."* ]]; then
         # Pane target (session:window.pane)
         tmux capture-pane -ep -t "$target" 2>/dev/null
     elif [[ "$target" == *":"* ]]; then
@@ -155,7 +150,9 @@ if [[ -n "$target" && "$target" != "#" ]]; then
         tmux capture-pane -ep -t "$target:" 2>/dev/null
     fi
 else
-    echo "Command: $line"
+    # No target, show current pane or command info
+    cmd=$(echo "$line" | sed 's/^\[[^]]*\] //' | sed 's/  .*//')
+    echo "Command: $cmd"
 fi
 PREVIEW_SCRIPT
 )
@@ -175,7 +172,9 @@ else
 fi
 
 # Run fzf and get selection
-selected=$(generate_candidates | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS $preview_opts")
+# --tac: reverse order so last output (current/no-target) appears at top (easiest to select)
+# --no-sort: preserve our proximity-based ordering
+selected=$(generate_candidates | eval "$TMUX_FZF_BIN $TMUX_FZF_OPTIONS --tac --no-sort $preview_opts")
 
 # Cleanup
 rm -f "$preview_file"
@@ -183,156 +182,100 @@ rm -f "$preview_file"
 # Exit if nothing selected
 [[ -z "$selected" ]] && exit 0
 
-# Parse selection: [type] action target  # comment
-type=$(echo "$selected" | grep -oE '^\[[^]]+\]')
-rest=$(echo "$selected" | sed 's/^\[[^]]*\] //' | sed 's/  #.*//')
-action=$(echo "$rest" | awk '{print $1}')
-target=$(echo "$rest" | awk '{print $2}')
+# Parse selection: [type] tmux-command [args]  description
+cmd=$(echo "$selected" | sed 's/^\[[^]]*\] //' | sed 's/  .*//' | sed 's/ \*$//' | sed 's/ \* / /')
+tmux_cmd=$(echo "$cmd" | awk '{print $1}')
 
-# Dispatch based on type and action
-case "$type" in
-    "[S]")
-        case "$action" in
-            switch)
-                tmux switch-client -t "$target"
-                ;;
-            kill)
-                tmux kill-session -t "$target"
-                ;;
-            detach)
-                tmux detach -s "$target"
-                ;;
-            rename)
-                # Call original script with action and target
-                "$CURRENT_DIR/session.sh" rename "$target"
-                ;;
-            new)
-                "$CURRENT_DIR/session.sh" new
-                ;;
-        esac
+# Extract target from -t flag (destination) and -s flag (source) if present
+target=$(echo "$cmd" | grep -oE '\-t [^ ]+' | awk '{print $2}')
+source=$(echo "$cmd" | grep -oE '\-s [^ ]+' | awk '{print $2}')
+
+# Dispatch: most commands run directly, some need interactive scripts
+case "$tmux_cmd" in
+    # === Session commands ===
+    switch-client|kill-session|detach-client)
+        tmux $cmd
         ;;
-    "[W]")
-        case "$action" in
-            switch)
-                # Switch to session first, then window
-                session=$(echo "$target" | sed 's/:.*//')
-                tmux switch-client -t "$session"
-                tmux select-window -t "$target"
-                ;;
-            kill)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux kill-window
-                else
-                    tmux unlink-window -k -t "$target"
-                fi
-                ;;
-            rename)
-                "$CURRENT_DIR/window.sh" rename "$target"
-                ;;
-            swap)
-                "$CURRENT_DIR/window.sh" swap "$target"
-                ;;
-            new)
-                tmux new-window
-                ;;
-            split-h)
-                tmux split-window -h
-                ;;
-            split-v)
-                tmux split-window -v
-                ;;
-            link)
-                "$CURRENT_DIR/window.sh" link
-                ;;
-            move)
-                "$CURRENT_DIR/window.sh" move
-                ;;
-            respawn)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux respawn-window -k
-                else
-                    tmux respawn-window -k -t "$target"
-                fi
-                ;;
-            rotate)
-                tmux rotate-window
-                ;;
-            next-layout)
-                tmux next-layout
-                ;;
-            last-window)
-                tmux last-window
-                ;;
-        esac
+    rename-session)
+        "$CURRENT_DIR/session.sh" rename "$target"
         ;;
-    "[P]")
-        case "$action" in
-            switch)
-                session=$(echo "$target" | sed -E 's/:.*//g')
-                window=$(echo "$target" | sed -E 's/\..*//g')
-                tmux switch-client -t "$session"
-                tmux select-window -t "$window"
-                tmux select-pane -t "$target"
-                ;;
-            kill)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux kill-pane
-                else
-                    tmux kill-pane -t "$target"
-                fi
-                ;;
-            zoom)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux resize-pane -Z
-                else
-                    tmux resize-pane -Z -t "$target"
-                fi
-                ;;
-            break)
-                "$CURRENT_DIR/pane.sh" break "$target"
-                ;;
-            swap)
-                "$CURRENT_DIR/pane.sh" swap "$target"
-                ;;
-            join)
-                "$CURRENT_DIR/pane.sh" join "$target"
-                ;;
-            layout)
-                "$CURRENT_DIR/pane.sh" layout
-                ;;
-            resize)
-                "$CURRENT_DIR/pane.sh" resize
-                ;;
-            respawn)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux respawn-pane -k
-                else
-                    tmux respawn-pane -k -t "$target"
-                fi
-                ;;
-            clear-history)
-                if [[ "$target" == "[current]" ]]; then
-                    tmux clear-history
-                else
-                    tmux clear-history -t "$target"
-                fi
-                ;;
-            last-pane)
-                tmux last-pane
-                ;;
-            copy-mode)
-                tmux copy-mode
-                ;;
-        esac
+    new-session)
+        "$CURRENT_DIR/session.sh" new
         ;;
-    "[G]")
-        case "$action" in
-            display-panes)
-                tmux display-panes
-                ;;
-            clock-mode)
-                tmux clock-mode
-                ;;
-        esac
+
+    # === Window commands ===
+    select-window)
+        # Switch to session first, then window
+        session=$(echo "$target" | sed 's/:.*//')
+        tmux switch-client -t "$session"
+        tmux select-window -t "$target"
+        ;;
+    kill-window)
+        tmux unlink-window -k -t "$target"
+        ;;
+    respawn-window)
+        tmux respawn-window -k -t "$target"
+        ;;
+    rename-window)
+        "$CURRENT_DIR/window.sh" rename "$target"
+        ;;
+    swap-window)
+        # -s source -t target; source is pre-selected, target needs selection
+        "$CURRENT_DIR/window.sh" swap "$source"
+        ;;
+    link-window)
+        "$CURRENT_DIR/window.sh" link
+        ;;
+    move-window)
+        "$CURRENT_DIR/window.sh" move
+        ;;
+    new-window|split-window|rotate-window|next-layout|last-window)
+        tmux $cmd
+        ;;
+
+    # === Pane commands ===
+    select-pane)
+        session=$(echo "$target" | sed -E 's/:.*//g')
+        window=$(echo "$target" | sed -E 's/\..*//g')
+        tmux switch-client -t "$session"
+        tmux select-window -t "$window"
+        tmux select-pane -t "$target"
+        ;;
+    kill-pane|clear-history)
+        tmux $tmux_cmd -t "$target"
+        ;;
+    resize-pane)
+        if echo "$cmd" | grep -q '\-Z'; then
+            # zoom toggle
+            tmux resize-pane -Z -t "$target"
+        else
+            # interactive resize
+            "$CURRENT_DIR/pane.sh" resize
+        fi
+        ;;
+    respawn-pane)
+        tmux respawn-pane -k -t "$target"
+        ;;
+    break-pane)
+        "$CURRENT_DIR/pane.sh" break "$target"
+        ;;
+    swap-pane)
+        # -s source -t target; source is pre-selected, target needs selection
+        "$CURRENT_DIR/pane.sh" swap "$source"
+        ;;
+    join-pane)
+        # -s source; move source pane to current window
+        "$CURRENT_DIR/pane.sh" join "$source"
+        ;;
+    select-layout)
+        "$CURRENT_DIR/pane.sh" layout
+        ;;
+    last-pane|copy-mode)
+        tmux $tmux_cmd
+        ;;
+
+    # === Global commands ===
+    display-panes|clock-mode)
+        tmux $tmux_cmd
         ;;
 esac
