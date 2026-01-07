@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Unified Command Palette - flat search for all tmux commands
-# Usage: bind-key P run-shell -b "path/to/unified.sh"
+# Keybinding: set TMUX_FZF_UNIFIED_KEY in .tmux.conf (default: P)
 
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CURRENT_DIR/.envs"
